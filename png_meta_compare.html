@@ -75,6 +75,10 @@ font-size: 13px; white-space: pre-wrap; word-break: break-word; min-height: 60px
 }
 .badge-diff { font-size: 11px; color: #a15c07; border: 1px solid var(--diff-border); background: var(--diff-bg); border-radius: 999px; padding: 1px 8px;}
 .badge-same { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;}
+.tag-only { background: var(--diff-bg); border: 1px solid var(--diff-border); border-radius: 5px; padding: 0 3px;}
+.tag-changed { background: #e4ebf7; border: 1px solid #a9bde0; border-radius: 5px; padding: 0 3px;}
+.legend { font-size: 12px; color: var(--muted); margin: 0 0 10px;}
+.legend .tag-only, .legend .tag-changed { color: var(--text);}
 .empty-note { color: var(--muted); font-size: 13.5px;}
 footer { margin-top: 22px; color: var(--muted); font-size: 12.5px;}
 footer ul { margin: 6px 0 0; padding-left: 18px;}
@@ -115,6 +119,7 @@ footer ul { margin: 6px 0 0; padding-left: 18px;}
 
 <section class="panel" id="promptPanel" style="display:none">
 <h2>プロンプト</h2>
+<p class="legend">タグの色：<span class="tag-only">片方にだけあるタグ</span> <span class="tag-changed">強調の強さが違うタグ</span></p>
 <div class="prompts">
 <div class="prompt-box">
 <h3>ポジティブ（A） <span><span id="posBadge"></span> <button data-copy="posA">コピー</button></span></h3>
@@ -532,7 +537,51 @@ function buildRows(a, b) {
   return rows;
 }
 
-const Core = { extractTextChunks, extractSettings, parseComfyPrompt, parseComfyWorkflow, parseA1111, parseNovelAI, buildRows, formatLoras };
+// ---------- プロンプトのタグ単位の比較 ----------
+
+// 強調記号や重みを取り除いた、比較用のキーにする
+function tagKey(token) {
+  let t = String(token).trim().toLowerCase().replace(/\s+/g, ' ');
+  let prev = '';
+  while (t !== prev) {
+    prev = t;
+    t = t.replace(/^\((.*)\)$/, '$1').replace(/^\{(.*)\}$/, '$1').replace(/^\[(.*)\]$/, '$1').trim();
+  }
+  t = t.replace(/:\s*-?[0-9]*\.?[0-9]+\s*$/, '').trim();
+  return t;
+}
+
+function splitPromptTags(text) {
+  return String(text || '').split(',').map(s => s.trim()).filter(s => s.length > 0);
+}
+
+// 2つのプロンプトをタグ単位で比べる
+// 戻り値: { a: [{text, cls}], b: [{text, cls}] } cls は 'same' | 'only' | 'changed'
+// 'only' = 片方にだけあるタグ、'changed' = 同じタグで強調の強さが違う
+function diffPromptTags(textA, textB) {
+  const mark = (mine, other) => {
+    const pool = new Map();
+    for (const raw of other) {
+      const k = tagKey(raw);
+      if (!pool.has(k)) pool.set(k, []);
+      pool.get(k).push(raw);
+    }
+    return mine.map(raw => {
+      const k = tagKey(raw);
+      const list = pool.get(k);
+      if (!list || list.length === 0) return { text: raw, cls: 'only' };
+      const exact = list.indexOf(raw);
+      if (exact >= 0) { list.splice(exact, 1); return { text: raw, cls: 'same' }; }
+      list.splice(0, 1);
+      return { text: raw, cls: 'changed' };
+    });
+  };
+  const tagsA = splitPromptTags(textA);
+  const tagsB = splitPromptTags(textB);
+  return { a: mark(tagsA, tagsB), b: mark(tagsB, tagsA) };
+}
+
+const Core = { extractTextChunks, extractSettings, parseComfyPrompt, parseComfyWorkflow, parseA1111, parseNovelAI, buildRows, formatLoras, splitPromptTags, tagKey, diffPromptTags };
 if (typeof module !== 'undefined' && module.exports) module.exports = Core;
 if (typeof window !== 'undefined') window.PNGMetaCore = Core;
 
@@ -614,6 +663,26 @@ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]
 });
 }
 
+function fillPrompt(idA, idB, ta, tb, both) {
+var setOne = function (id, text, parts) {
+var el = document.getElementById(id);
+if (!text) { el.textContent = '（なし）'; return;}
+if (!parts) { el.textContent = text; return;}
+el.innerHTML = parts.map(function (p) {
+if (p.cls === 'same') return esc(p.text);
+return '<span class="tag-' + p.cls + '">' + esc(p.text) + '</span>';
+}).join(', ');
+};
+if (both && (ta || tb)) {
+var d = Core.diffPromptTags(ta, tb);
+setOne(idA, ta, d.a);
+setOne(idB, tb, d.b);
+} else {
+setOne(idA, ta, null);
+setOne(idB, tb, null);
+}
+}
+
 function renderResults() {
 var a = state.A && state.A.settings, b = state.B && state.B.settings;
 var panel = document.getElementById('resultPanel');
@@ -637,10 +706,8 @@ summary.className = 'badge-same';
 }
 var pa = a? a.positive: '', pb = b? b.positive: '';
 var na = a? a.negative: '', nb = b? b.negative: '';
-document.getElementById('posA').textContent = pa || '（なし）';
-document.getElementById('posB').textContent = pb || '（なし）';
-document.getElementById('negA').textContent = na || '（なし）';
-document.getElementById('negB').textContent = nb || '（なし）';
+fillPrompt('posA', 'posB', pa, pb, !!b);
+fillPrompt('negA', 'negB', na, nb, !!b);
 document.getElementById('posBadge').innerHTML = b? (pa!== pb? '<span class="badge-diff">差異あり</span>': '<span class="badge-same">同じ</span>'): '';
 document.getElementById('negBadge').innerHTML = b? (na!== nb? '<span class="badge-diff">差異あり</span>': '<span class="badge-same">同じ</span>'): '';
 }
