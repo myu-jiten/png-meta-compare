@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>生成PNG メタデータ比較ツール</title>
+<style>
+:root {
+--bg: #f4f4f2;
+--surface: #ffffff;
+--surface-muted: #ececea;
+--text: #242422;
+--muted: #6d6d66;
+--border: #d9d9d2;
+--accent: #2e6f5e;
+--accent-soft: #e3efe9;
+--diff-bg: #fdf3d7;
+--diff-border: #e3cf8a;
+--radius: 14px;
+}
+* { box-sizing: border-box;}
+body {
+margin: 0; background: var(--bg); color: var(--text);
+font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif;
+line-height: 1.6;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 28px 18px 48px;}
+header h1 { font-size: 22px; margin: 0 0 4px; letter-spacing:.02em;}
+header p { margin: 0 0 20px; color: var(--muted); font-size: 13.5px;}
+.slots { display: grid; grid-template-columns: 1fr 1fr; gap: 16px;}
+@media (max-width: 720px) {.slots { grid-template-columns: 1fr;}}
+.slot {
+background: var(--surface); border: 1px solid var(--border);
+border-radius: var(--radius); padding: 10px;
+}
+.drop {
+border: 1.5px dashed var(--border); border-radius: calc(var(--radius) - 10px + 6px);
+min-height: 190px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+gap: 8px; padding: 14px; text-align: center; cursor: pointer; color: var(--muted);
+transition: border-color.15s, background.15s;
+}
+.drop:hover { border-color: var(--accent);}
+.drop.dragging { border-color: var(--accent); background: var(--accent-soft);}
+.drop.slot-name { font-weight: 700; color: var(--text); font-size: 15px;}
+.drop img { max-width: 100%; max-height: 300px; border-radius: 6px; outline: 1px solid rgba(0,0,0,.1);}
+.drop.fname { font-size: 12.5px; color: var(--text); word-break: break-all;}
+.drop.meta { font-size: 12px;}
+.drop.warn { font-size: 12px; color: #a15c07;}
+button {
+font: inherit; font-size: 13px; border: 1px solid var(--border); background: var(--surface);
+color: var(--text); border-radius: 8px; padding: 5px 12px; cursor: pointer;
+transition: transform.15s, background.15s;
+}
+button:hover { background: var(--surface-muted);}
+button:active { transform: scale(.96);}
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff;}
+button.primary:hover { background: var(--accent); filter: brightness(1.08);}
+section.panel {
+background: var(--surface); border: 1px solid var(--border);
+border-radius: var(--radius); padding: 18px; margin-top: 16px;
+}
+section.panel h2 { font-size: 16px; margin: 0 0 12px;}
+table { width: 100%; border-collapse: collapse; font-size: 13.5px;}
+th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left;}
+th { background: var(--surface-muted); font-weight: 600; white-space: nowrap; width: 130px;}
+td { width: 44%; white-space: pre-wrap; word-break: break-word;}
+tr.differ td { background: var(--diff-bg);}
+tr.differ th { background: var(--diff-bg); border-color: var(--diff-border);}
+.prompts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px;}
+@media (max-width: 720px) {.prompts { grid-template-columns: 1fr;}}
+.prompt-box h3 { font-size: 13.5px; margin: 0 0 6px; display: flex; justify-content: space-between; align-items: center;}
+.prompt-box.body {
+background: var(--surface-muted); border-radius: 8px; padding: 10px 12px;
+font-size: 13px; white-space: pre-wrap; word-break: break-word; min-height: 60px;
+}
+.badge-diff { font-size: 11px; color: #a15c07; border: 1px solid var(--diff-border); background: var(--diff-bg); border-radius: 999px; padding: 1px 8px;}
+.badge-same { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;}
+.empty-note { color: var(--muted); font-size: 13.5px;}
+footer { margin-top: 22px; color: var(--muted); font-size: 12.5px;}
+footer ul { margin: 6px 0 0; padding-left: 18px;}
+.actions { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<h1>生成PNG メタデータ比較ツール</h1>
+<p>生成したPNGを2枚並べて、モデル・LoRA・サンプラー・シードなどの「レシピの違い」を一目で比べるツールです。画像はブラウザの中だけで読み取り、外部に送信されません。</p>
+</header>
+
+<div class="slots">
+<div class="slot">
+<div class="drop" id="dropA" tabindex="0">
+<div class="slot-name">画像 A</div>
+<div>クリック、またはPNGをここへドロップ</div>
+</div>
+</div>
+<div class="slot">
+<div class="drop" id="dropB" tabindex="0">
+<div class="slot-name">画像 B</div>
+<div>クリック、またはPNGをここへドロップ</div>
+</div>
+</div>
+</div>
+<input type="file" id="fileInput" accept="image/png" style="display:none">
+
+<section class="panel" id="resultPanel" style="display:none">
+<h2>設定の比較 <span id="diffSummary" class="badge-same"></span></h2>
+<table id="resultTable"><tbody></tbody></table>
+<div class="actions">
+<button id="copyReport" class="primary">比較結果をテキストでコピー</button>
+<button id="clearAll">両方クリア</button>
+</div>
+</section>
+
+<section class="panel" id="promptPanel" style="display:none">
+<h2>プロンプト</h2>
+<div class="prompts">
+<div class="prompt-box">
+<h3>ポジティブ（A） <span><span id="posBadge"></span> <button data-copy="posA">コピー</button></span></h3>
+<div class="body" id="posA"></div>
+</div>
+<div class="prompt-box">
+<h3>ポジティブ（B） <span><button data-copy="posB">コピー</button></span></h3>
+<div class="body" id="posB"></div>
+</div>
+<div class="prompt-box">
+<h3>ネガティブ（A） <span><span id="negBadge"></span> <button data-copy="negA">コピー</button></span></h3>
+<div class="body" id="negA"></div>
+</div>
+<div class="prompt-box">
+<h3>ネガティブ（B） <span><button data-copy="negB">コピー</button></span></h3>
+<div class="body" id="negB"></div>
+</div>
+</div>
+</section>
+
+<footer>
+<div>対応形式</div>
+<ul>
+<li>ComfyUI のPNG（埋め込みの prompt / workflow を読み取ります。LoRAはKSamplerへ実際に接続されているものだけを表示します）</li>
+<li>A1111系（WebUI / Forge など）のPNG（parameters を読み取ります）</li>
+<li>NovelAI のPNG（Comment のJSON形式に対応。画像へ埋め込むステルス形式には未対応です）</li>
+<li>メタデータの無いPNGでは、設定は表示されません</li>
+</ul>
+</footer>
+</div>
+
+<script>
+'use strict';
+/*
+ * PNG メタデータ読み取り＆比較コア
+ * 対応: ComfyUI (prompt / workflow), A1111系 (parameters), NovelAI (Comment JSON)
+ * ブラウザと Node の両方で動くよう、inflate は注入式にする。
+ *   ブラウザ: DecompressionStream('deflate')
+ *   Node   : zlib.inflateSync
+ */
+
+// ---------- PNG テキストチャンク抽出 ----------
+
+function readU32BE(bytes, off) {
+  return ((bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3]) >>> 0;
+}
+
+function latin1(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
+  return s;
+}
+
+function findNull(bytes, from) {
+  for (let i = from; i < bytes.length; i++) if (bytes[i] === 0) return i;
+  return -1;
+}
+
+// inflateFn: (Uint8Array) => Promise<Uint8Array>
+async function extractTextChunks(arrayBuffer, inflateFn) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const out = {};
+  // PNGシグネチャ確認
+  if (bytes.length < 8 || bytes[0] !== 0x89 || bytes[1] !== 0x50) return out;
+  let off = 8;
+  const dec = new TextDecoder('utf-8');
+  while (off + 8 <= bytes.length) {
+    const len = readU32BE(bytes, off);
+    const type = latin1(bytes.subarray(off + 4, off + 8));
+    const dataStart = off + 8;
+    const dataEnd = dataStart + len;
+    if (dataEnd > bytes.length) break;
+    const data = bytes.subarray(dataStart, dataEnd);
+    try {
+      if (type === 'tEXt') {
+        const nul = findNull(data, 0);
+        if (nul > 0) out[latin1(data.subarray(0, nul))] = latin1(data.subarray(nul + 1));
+      } else if (type === 'zTXt') {
+        const nul = findNull(data, 0);
+        if (nul > 0 && inflateFn) {
+          const plain = await inflateFn(data.subarray(nul + 2));
+          out[latin1(data.subarray(0, nul))] = dec.decode(plain);
+        }
+      } else if (type === 'iTXt') {
+        const nul = findNull(data, 0);
+        if (nul > 0) {
+          const compFlag = data[nul + 1];
+          let p = nul + 3; // compression flag + method を飛ばす
+          const langEnd = findNull(data, p); if (langEnd < 0) { /* noop */ }
+          p = langEnd + 1;
+          const transEnd = findNull(data, p);
+          p = transEnd + 1;
+          const raw = data.subarray(p);
+          if (compFlag === 1 && inflateFn) {
+            const plain = await inflateFn(raw);
+            out[latin1(data.subarray(0, nul))] = dec.decode(plain);
+          } else if (compFlag === 0) {
+            out[latin1(data.subarray(0, nul))] = dec.decode(raw);
+          }
+        }
+      }
+    } catch (e) { /* 壊れたチャンクは読み飛ばす */ }
+    if (type === 'IEND') break;
+    off = dataEnd + 4; // CRC分
+  }
+  return out;
+}
+
+// ---------- 共通の整形 ----------
+
+function blankSettings() {
+  return {
+    source: '', model: '', loras: [], sampler: '', scheduler: '', steps: '',
+    cfg: '', seed: '', denoise: '', width: '', height: '', clipSkip: '',
+    vae: '', positive: '', negative: '', extraSamplers: []
+  };
+}
+
+function str(v) { return (v === undefined || v === null) ? '' : String(v); }
+
+// ---------- ComfyUI: API形式 prompt ----------
+
+function isLink(v) { return Array.isArray(v) && v.length === 2 && typeof v[0] === 'string'; }
+
+function resolveText(node, byId, depth) {
+  if (!node || depth > 3) return '';
+  const inp = node.inputs || {};
+  if (typeof inp.text === 'string') return inp.text;
+  if (typeof inp.value === 'string') return inp.value;
+  if (typeof inp.string === 'string') return inp.string;
+  if (isLink(inp.text)) return resolveText(byId[inp.text[0]], byId, depth + 1);
+  if (isLink(inp.value)) return resolveText(byId[inp.value[0]], byId, depth + 1);
+  // ConditioningCombine / Concat などは最初の入力をたどる
+  if (isLink(inp.conditioning_1)) return resolveText(byId[inp.conditioning_1[0]], byId, depth + 1);
+  if (isLink(inp.conditioning)) return resolveText(byId[inp.conditioning[0]], byId, depth + 1);
+  return '';
+}
+
+function parseComfyPrompt(promptObj) {
+  const s = blankSettings();
+  s.source = 'ComfyUI';
+  const byId = {};
+  const nodes = [];
+  for (const [id, n] of Object.entries(promptObj)) {
+    if (n && typeof n === 'object' && n.class_type) { byId[id] = n; nodes.push({ id, ...n }); }
+  }
+  const samplers = nodes.filter(n => n.class_type === 'KSampler' || n.class_type === 'KSamplerAdvanced');
+  const firstSampler = samplers[0];
+
+  // モデルとLoRA: 最初のKSamplerの model 入力をチェーンでさかのぼる
+  const loras = [];
+  let model = '';
+  if (firstSampler && isLink(firstSampler.inputs.model)) {
+    let cur = byId[firstSampler.inputs.model[0]];
+    let guard = 0;
+    while (cur && guard++ < 30) {
+      const ct = cur.class_type;
+      if (ct === 'LoraLoader' || ct === 'LoraLoaderModelOnly') {
+        loras.unshift({
+          name: str(cur.inputs.lora_name),
+          model: str(cur.inputs.strength_model),
+          clip: cur.inputs.strength_clip !== undefined ? str(cur.inputs.strength_clip) : ''
+        });
+      } else if (ct === 'CheckpointLoaderSimple' || ct === 'CheckpointLoader') {
+        model = str(cur.inputs.ckpt_name); break;
+      } else if (ct === 'UNETLoader' || ct === 'UnetLoaderGGUF') {
+        model = str(cur.inputs.unet_name); break;
+      }
+      if (isLink(cur.inputs && cur.inputs.model)) cur = byId[cur.inputs.model[0]];
+      else break;
+    }
+  }
+  if (!model) {
+    const ck = nodes.find(n => n.class_type === 'CheckpointLoaderSimple' || n.class_type === 'CheckpointLoader');
+    if (ck) model = str(ck.inputs.ckpt_name);
+    const un = nodes.find(n => n.class_type === 'UNETLoader' || n.class_type === 'UnetLoaderGGUF');
+    if (!model && un) model = str(un.inputs.unet_name);
+  }
+  if (loras.length === 0) {
+    for (const n of nodes) {
+      if (n.class_type === 'LoraLoader' || n.class_type === 'LoraLoaderModelOnly') {
+        loras.push({ name: str(n.inputs.lora_name), model: str(n.inputs.strength_model), clip: n.inputs.strength_clip !== undefined ? str(n.inputs.strength_clip) : '' });
+      }
+    }
+  }
+  s.model = model;
+  s.loras = loras;
+
+  const fillSampler = (target, ks) => {
+    target.seed = str(ks.inputs.seed !== undefined ? ks.inputs.seed : ks.inputs.noise_seed);
+    target.steps = str(ks.inputs.steps);
+    target.cfg = str(ks.inputs.cfg);
+    target.sampler = str(ks.inputs.sampler_name);
+    target.scheduler = str(ks.inputs.scheduler);
+    target.denoise = str(ks.inputs.denoise);
+  };
+  if (firstSampler) {
+    fillSampler(s, firstSampler);
+    if (isLink(firstSampler.inputs.positive)) s.positive = resolveText(byId[firstSampler.inputs.positive[0]], byId, 0);
+    if (isLink(firstSampler.inputs.negative)) s.negative = resolveText(byId[firstSampler.inputs.negative[0]], byId, 0);
+    if (isLink(firstSampler.inputs.latent_image)) {
+      const lat = byId[firstSampler.inputs.latent_image[0]];
+      if (lat && lat.class_type === 'EmptyLatentImage') { s.width = str(lat.inputs.width); s.height = str(lat.inputs.height); }
+    }
+    for (let i = 1; i < samplers.length; i++) {
+      const ex = { seed: '', steps: '', cfg: '', sampler: '', scheduler: '', denoise: '' };
+      fillSampler(ex, samplers[i]);
+      s.extraSamplers.push(ex);
+    }
+  }
+  if (!s.positive || !s.negative) {
+    const texts = nodes.filter(n => n.class_type === 'CLIPTextEncode');
+    if (!s.positive && texts[0]) s.positive = resolveText(texts[0], byId, 0);
+    if (!s.negative && texts[1]) s.negative = resolveText(texts[1], byId, 0);
+  }
+  if (!s.width) {
+    const lat = nodes.find(n => n.class_type === 'EmptyLatentImage');
+    if (lat) { s.width = str(lat.inputs.width); s.height = str(lat.inputs.height); }
+  }
+  const cs = nodes.find(n => n.class_type === 'CLIPSetLastLayer');
+  if (cs) s.clipSkip = str(cs.inputs.stop_at_clip_layer);
+  const vae = nodes.find(n => n.class_type === 'VAELoader');
+  if (vae) s.vae = str(vae.inputs.vae_name);
+  return s;
+}
+
+// ---------- ComfyUI: UI形式 workflow（prompt が無い時の予備） ----------
+
+function parseComfyWorkflow(wf) {
+  const s = blankSettings();
+  s.source = 'ComfyUI';
+  const nodes = wf.nodes || [];
+  const byId = {};
+  for (const n of nodes) byId[n.id] = n;
+  const links = {};
+  for (const l of (wf.links || [])) links[l[0]] = l; // [id, originId, originSlot, targetId, targetSlot, type]
+  const wv = n => (n && n.widgets_values) || [];
+  const followInput = (node, inputName) => {
+    const inp = (node.inputs || []).find(i => i.name === inputName);
+    if (!inp || inp.link === undefined || inp.link === null) return null;
+    const link = links[inp.link];
+    if (!link) return null;
+    return byId[link[1]] || null;
+  };
+  const ks = nodes.find(n => n.type === 'KSampler');
+  if (ks) {
+    const v = wv(ks); // [seed, control, steps, cfg, sampler, scheduler, denoise]
+    s.seed = str(v[0]); s.steps = str(v[2]); s.cfg = str(v[3]);
+    s.sampler = str(v[4]); s.scheduler = str(v[5]); s.denoise = str(v[6]);
+    const pos = followInput(ks, 'positive');
+    if (pos && pos.type === 'CLIPTextEncode') s.positive = str(wv(pos)[0]);
+    const neg = followInput(ks, 'negative');
+    if (neg && neg.type === 'CLIPTextEncode') s.negative = str(wv(neg)[0]);
+    // モデルチェーン
+    let cur = followInput(ks, 'model');
+    let guard = 0;
+    const loras = [];
+    while (cur && guard++ < 30) {
+      if (cur.type === 'LoraLoader' || cur.type === 'LoraLoaderModelOnly') {
+        const lv = wv(cur);
+        loras.unshift({ name: str(lv[0]), model: str(lv[1]), clip: str(lv[2]) });
+      } else if (cur.type === 'CheckpointLoaderSimple') { s.model = str(wv(cur)[0]); break; }
+      else if (cur.type === 'UNETLoader') { s.model = str(wv(cur)[0]); break; }
+      cur = followInput(cur, 'model');
+    }
+    s.loras = loras;
+    const lat = followInput(ks, 'latent_image');
+    if (lat && lat.type === 'EmptyLatentImage') { s.width = str(wv(lat)[0]); s.height = str(wv(lat)[1]); }
+  }
+  if (!s.positive) {
+    const texts = nodes.filter(n => n.type === 'CLIPTextEncode');
+    if (texts[0]) s.positive = str(wv(texts[0])[0]);
+    if (texts[1]) s.negative = str(wv(texts[1])[0]);
+  }
+  if (!s.model) {
+    const ck = nodes.find(n => n.type === 'CheckpointLoaderSimple');
+    if (ck) s.model = str(wv(ck)[0]);
+  }
+  if (s.loras.length === 0) {
+    for (const n of nodes) if (n.type === 'LoraLoader') { const lv = wv(n); s.loras.push({ name: str(lv[0]), model: str(lv[1]), clip: str(lv[2]) }); }
+  }
+  const cs = nodes.find(n => n.type === 'CLIPSetLastLayer');
+  if (cs) s.clipSkip = str(wv(cs)[0]);
+  return s;
+}
+
+// ---------- A1111系 parameters ----------
+
+function parseA1111(text) {
+  const s = blankSettings();
+  s.source = 'A1111系';
+  const lines = text.split(/\r?\n/);
+  let paramLine = '';
+  let bodyLines = lines;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^Steps: /.test(lines[i])) { paramLine = lines[i]; bodyLines = lines.slice(0, i); break; }
+  }
+  const body = bodyLines.join('\n');
+  const negIdx = body.indexOf('Negative prompt:');
+  if (negIdx >= 0) {
+    s.positive = body.slice(0, negIdx).trim();
+    s.negative = body.slice(negIdx + 'Negative prompt:'.length).trim();
+  } else {
+    s.positive = body.trim();
+  }
+  const params = {};
+  const re = /([A-Za-z0-9 _\-\.]+): ([^,]+)(?:, |$)/g;
+  let m;
+  while ((m = re.exec(paramLine)) !== null) params[m[1].trim()] = m[2].trim();
+  s.steps = str(params['Steps']);
+  s.sampler = str(params['Sampler']);
+  s.cfg = str(params['CFG scale']);
+  s.seed = str(params['Seed']);
+  s.model = str(params['Model']);
+  s.clipSkip = str(params['Clip skip']);
+  s.vae = str(params['VAE']);
+  s.scheduler = str(params['Schedule type']);
+  if (params['Size']) {
+    const [w, h] = params['Size'].split('x');
+    s.width = str(w); s.height = str(h);
+  }
+  const loraRe = /<lora:([^:>]+):([0-9.]+)(?::([0-9.]+))?>/g;
+  let lm;
+  while ((lm = loraRe.exec(s.positive)) !== null) {
+    s.loras.push({ name: lm[1], model: lm[2], clip: lm[3] !== undefined ? lm[3] : '' });
+  }
+  return s;
+}
+
+// ---------- NovelAI Comment JSON ----------
+
+function parseNovelAI(obj) {
+  const s = blankSettings();
+  s.source = 'NovelAI';
+  s.positive = str(obj.prompt);
+  s.negative = str(obj.uc);
+  s.steps = str(obj.steps);
+  s.cfg = str(obj.scale);
+  s.seed = str(obj.seed);
+  s.sampler = str(obj.sampler);
+  s.scheduler = str(obj.noise_schedule);
+  s.width = str(obj.width);
+  s.height = str(obj.height);
+  return s;
+}
+
+// ---------- チャンクから設定を取り出す ----------
+
+function extractSettings(chunks) {
+  if (chunks.prompt) {
+    try { return parseComfyPrompt(JSON.parse(chunks.prompt)); } catch (e) { /* 次へ */ }
+  }
+  if (chunks.parameters) return parseA1111(chunks.parameters);
+  if (chunks.Comment) {
+    try {
+      const obj = JSON.parse(chunks.Comment);
+      if (obj && (obj.prompt !== undefined || obj.uc !== undefined)) return parseNovelAI(obj);
+    } catch (e) { /* 次へ */ }
+  }
+  if (chunks.workflow) {
+    try { return parseComfyWorkflow(JSON.parse(chunks.workflow)); } catch (e) { /* 次へ */ }
+  }
+  return null;
+}
+
+// ---------- 比較表 ----------
+
+function formatLoras(loras) {
+  if (!loras || loras.length === 0) return '';
+  return loras.map(l => l.clip ? `${l.name} (${l.model}/${l.clip})` : `${l.name} (${l.model})`).join('\n');
+}
+
+const ROW_DEFS = [
+  ['source', '生成元'],
+  ['model', 'モデル'],
+  ['loras', 'LoRA'],
+  ['sampler', 'サンプラー'],
+  ['scheduler', 'スケジューラ'],
+  ['steps', 'ステップ数'],
+  ['cfg', 'CFG'],
+  ['seed', 'シード'],
+  ['denoise', 'ノイズ除去'],
+  ['width', '幅'],
+  ['height', '高さ'],
+  ['clipSkip', 'クリップスキップ'],
+  ['vae', 'VAE']
+];
+
+function fieldValue(s, key) {
+  if (!s) return '';
+  if (key === 'loras') return formatLoras(s.loras);
+  return str(s[key]);
+}
+
+function buildRows(a, b) {
+  const rows = [];
+  for (const [key, label] of ROW_DEFS) {
+    const va = fieldValue(a, key);
+    const vb = fieldValue(b, key);
+    rows.push({ key, label, a: va, b: vb, differ: va !== vb });
+  }
+  // 追加サンプラー（ハイレゾ等）があれば行を足す
+  const maxEx = Math.max(a && a.extraSamplers ? a.extraSamplers.length : 0, b && b.extraSamplers ? b.extraSamplers.length : 0);
+  for (let i = 0; i < maxEx; i++) {
+    const fmt = s => {
+      if (!s || !s.extraSamplers || !s.extraSamplers[i]) return '';
+      const e = s.extraSamplers[i];
+      return `${e.sampler} / ${e.steps} steps / CFG ${e.cfg} / seed ${e.seed} / denoise ${e.denoise}`;
+    };
+    const va = fmt(a), vb = fmt(b);
+    rows.push({ key: 'extra' + i, label: 'サンプラー' + (i + 2), a: va, b: vb, differ: va !== vb });
+  }
+  return rows;
+}
+
+const Core = { extractTextChunks, extractSettings, parseComfyPrompt, parseComfyWorkflow, parseA1111, parseNovelAI, buildRows, formatLoras };
+if (typeof module !== 'undefined' && module.exports) module.exports = Core;
+if (typeof window !== 'undefined') window.PNGMetaCore = Core;
+
+</script>
+<script>
+(function () {
+var Core = window.PNGMetaCore;
+var state = { A: null, B: null}; // {name, url, settings, width, height, error}
+var targetSlot = 'A';
+
+async function inflate(u8) {
+if (typeof DecompressionStream === 'undefined') return null;
+try {
+var ds = new DecompressionStream('deflate');
+var stream = new Blob([u8]).stream().pipeThrough(ds);
+var buf = await new Response(stream).arrayBuffer();
+return new Uint8Array(buf);
+} catch (e) { return null;}
+}
+
+async function loadFile(slot, file) {
+if (!file) return;
+var rec = { name: file.name, url: URL.createObjectURL(file), settings: null, error: ''};
+state[slot] = rec;
+renderSlot(slot);
+try {
+var buf = await file.arrayBuffer();
+var chunks = await Core.extractTextChunks(buf, inflate);
+rec.settings = Core.extractSettings(chunks);
+if (!rec.settings) rec.error = 'メタデータが見つかりませんでした';
+// 画像サイズ
+var img = new Image();
+await new Promise(function (res) { img.onload = res; img.onerror = res; img.src = rec.url;});
+rec.width = img.naturalWidth; rec.height = img.naturalHeight;
+} catch (e) {
+rec.error = '読み取りに失敗しました';
+}
+renderSlot(slot);
+renderResults();
+}
+
+function renderSlot(slot) {
+var drop = document.getElementById('drop' + slot);
+var rec = state[slot];
+drop.innerHTML = '';
+var name = document.createElement('div');
+name.className = 'slot-name'; name.textContent = '画像 ' + slot;
+drop.appendChild(name);
+if (!rec) {
+var hint = document.createElement('div');
+hint.textContent = 'クリック、またはPNGをここへドロップ';
+drop.appendChild(hint);
+return;
+}
+var img = document.createElement('img'); img.src = rec.url; img.alt = rec.name;
+drop.appendChild(img);
+var fn = document.createElement('div'); fn.className = 'fname'; fn.textContent = rec.name;
+drop.appendChild(fn);
+if (rec.width) {
+var meta = document.createElement('div'); meta.className = 'meta';
+meta.textContent = rec.width + ' x ' + rec.height + (rec.settings? ' / ' + rec.settings.source: '');
+drop.appendChild(meta);
+}
+if (rec.error) {
+var warn = document.createElement('div'); warn.className = 'warn'; warn.textContent = rec.error;
+drop.appendChild(warn);
+}
+var rm = document.createElement('button'); rm.textContent = '外す';
+rm.addEventListener('click', function (ev) {
+ev.stopPropagation();
+state[slot] = null; renderSlot(slot); renderResults();
+});
+drop.appendChild(rm);
+}
+
+function esc(s) {
+return String(s == null? '': s).replace(/[&<>"']/g, function (c) {
+return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+});
+}
+
+function renderResults() {
+var a = state.A && state.A.settings, b = state.B && state.B.settings;
+var panel = document.getElementById('resultPanel');
+var promptPanel = document.getElementById('promptPanel');
+if (!a &&!b) { panel.style.display = 'none'; promptPanel.style.display = 'none'; return;}
+panel.style.display = ''; promptPanel.style.display = '';
+var rows = Core.buildRows(a, b);
+var tbody = document.querySelector('#resultTable tbody');
+tbody.innerHTML = rows.map(function (r) {
+return '<tr class="' + (b && r.differ? 'differ': '') + '"><th>' + esc(r.label) + '</th><td>' +
+esc(r.a || '―') + '</td><td>' + esc(b? (r.b || '―'): '') + '</td></tr>';
+}).join('');
+var diffCount = rows.filter(function (r) { return r.differ;}).length;
+var summary = document.getElementById('diffSummary');
+if (b) {
+summary.textContent = diffCount > 0? ('違いは ' + diffCount + ' 項目'): '違いはありません';
+summary.className = diffCount > 0? 'badge-diff': 'badge-same';
+} else {
+summary.textContent = 'Bを読み込むと比較できます';
+summary.className = 'badge-same';
+}
+var pa = a? a.positive: '', pb = b? b.positive: '';
+var na = a? a.negative: '', nb = b? b.negative: '';
+document.getElementById('posA').textContent = pa || '（なし）';
+document.getElementById('posB').textContent = pb || '（なし）';
+document.getElementById('negA').textContent = na || '（なし）';
+document.getElementById('negB').textContent = nb || '（なし）';
+document.getElementById('posBadge').innerHTML = b? (pa!== pb? '<span class="badge-diff">差異あり</span>': '<span class="badge-same">同じ</span>'): '';
+document.getElementById('negBadge').innerHTML = b? (na!== nb? '<span class="badge-diff">差異あり</span>': '<span class="badge-same">同じ</span>'): '';
+}
+
+function reportText() {
+var a = state.A, b = state.B;
+var lines = [];
+lines.push('');
+lines.push('A: ' + (a? a.name: '（なし）'));
+lines.push('B: ' + (b? b.name: '（なし）'));
+lines.push('');
+var rows = Core.buildRows(a && a.settings, b && b.settings);
+for (var i = 0; i < rows.length; i++) {
+var r = rows[i];
+lines.push('■ ' + r.label + (r.differ? '（違いあり）': ''));
+lines.push(' A: ' + (r.a || '―').replace(/\n/g, ' / '));
+lines.push(' B: ' + (r.b || '―').replace(/\n/g, ' / '));
+}
+if (a && a.settings) { lines.push(''); lines.push('■ ポジティブ（A）'); lines.push(a.settings.positive);}
+if (b && b.settings) { lines.push(''); lines.push('■ ポジティブ（B）'); lines.push(b.settings.positive);}
+if (a && a.settings) { lines.push(''); lines.push('■ ネガティブ（A）'); lines.push(a.settings.negative);}
+if (b && b.settings) { lines.push(''); lines.push('■ ネガティブ（B）'); lines.push(b.settings.negative);}
+return lines.join('\n');
+}
+
+var fileInput = document.getElementById('fileInput');
+['A', 'B'].forEach(function (slot) {
+var drop = document.getElementById('drop' + slot);
+drop.addEventListener('click', function () { targetSlot = slot; fileInput.click();});
+drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); targetSlot = slot; fileInput.click();}});
+['dragenter', 'dragover'].forEach(function (ev) {
+drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('dragging');});
+});
+['dragleave', 'drop'].forEach(function (ev) {
+drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('dragging');});
+});
+drop.addEventListener('drop', function (e) {
+var f = e.dataTransfer.files && e.dataTransfer.files[0];
+if (f) loadFile(slot, f);
+});
+});
+fileInput.addEventListener('change', function () {
+if (fileInput.files[0]) loadFile(targetSlot, fileInput.files[0]);
+fileInput.value = '';
+});
+document.querySelectorAll('[data-copy]').forEach(function (btn) {
+btn.addEventListener('click', function () {
+var id = btn.getAttribute('data-copy');
+var s = null;
+if (id === 'posA') s = state.A && state.A.settings && state.A.settings.positive;
+if (id === 'posB') s = state.B && state.B.settings && state.B.settings.positive;
+if (id === 'negA') s = state.A && state.A.settings && state.A.settings.negative;
+if (id === 'negB') s = state.B && state.B.settings && state.B.settings.negative;
+if (s) navigator.clipboard.writeText(s);
+});
+});
+document.getElementById('copyReport').addEventListener('click', function () {
+navigator.clipboard.writeText(reportText());
+});
+document.getElementById('clearAll').addEventListener('click', function () {
+state.A = null; state.B = null;
+renderSlot('A'); renderSlot('B'); renderResults();
+});
+})();
+</script>
+</body>
+</html>
